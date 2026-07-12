@@ -1,0 +1,16 @@
+python-dotenv==0.21.0
+streamlit
+pandas
+numpy
+scikit-learn
+pymupdf
+pdfplumber
+python-docx
+spacy
+nltk
+langchain
+langchain_groq
+langchain-google-genai
+google-generativeai
+pymupdf4llm
+docx
