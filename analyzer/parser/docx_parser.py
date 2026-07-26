@@ -1,6 +1,7 @@
 import docx
+from langchain_core.tools import tool
 
-
+@tool
 def parse_docx(file_path):
     """
     Input: path to a DOCX file

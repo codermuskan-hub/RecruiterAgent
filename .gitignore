@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
@@ -6,3 +7,5 @@ __pycache__/
 .vscode/
 *.db
 .DS_Store
+temp_resume.pdf
+temp_uploads/

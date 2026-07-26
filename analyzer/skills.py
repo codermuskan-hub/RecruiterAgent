@@ -1,3 +1,6 @@
+from langchain_core.tools import tool
+
+@tool
 def extract_skills(resume_json):
     """
     Input: JSON/dict from json_maker
