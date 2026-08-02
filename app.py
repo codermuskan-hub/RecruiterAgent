@@ -14,6 +14,13 @@ for folder in ["analyzer", "scorer", "services"]:
 from analyzer.analyzer_agent import run_analyzer_pipeline
 from analyzer.jd_extractor import extract_jd_requirements
 from scorer.scorer_agent import run_scorer_pipeline
+from services.scheduler import (
+    get_available_time_slots,
+    schedule_candidate_interview,
+    list_scheduled_interviews,
+    create_new_slot
+)
+
 
 st.set_page_config(
     page_title="AI Recruiter Agent - Candidate Matcher & Scorer",
@@ -183,3 +190,68 @@ if st.button("🚀 Analyze & Rank Candidates", type="primary", use_container_wid
 
                     st.markdown("#### 📄 Extracted Structured JSON")
                     st.json(c["resume_json"])
+
+                    # ---------------------------------------------------------
+                    # Interview Scheduling Action inside Candidate Card
+                    # ---------------------------------------------------------
+                    st.markdown("#### 📅 Schedule Interview")
+                    avail_slots = get_available_time_slots()
+                    if avail_slots:
+                        slot_options = {f"{s['slot_time']} (ID: {s['id']})": s["id"] for s in avail_slots}
+                        selected_slot_label = st.selectbox(
+                            f"Select Interview Slot for {c['name']}:",
+                            options=list(slot_options.keys()),
+                            key=f"slot_select_{rank}_{c['name']}"
+                        )
+                        c_email = st.text_input("Candidate Email:", value=f"{c['name'].lower().replace(' ', '.')}@example.com", key=f"email_{rank}_{c['name']}")
+
+                        if st.button(f"🗓️ Confirm Schedule for {c['name']}", key=f"btn_sched_{rank}_{c['name']}"):
+                            slot_id = slot_options[selected_slot_label]
+                            res = schedule_candidate_interview(
+                                candidate_name=c["name"],
+                                candidate_email=c_email,
+                                role_title=jd_reqs.get("role_title", "General Role") if 'jd_reqs' in locals() and jd_reqs else "General Role",
+                                slot_id=slot_id
+                            )
+                            if res["status"] == "Success":
+                                st.success(f"✅ Interview scheduled for {c['name']}!")
+                                st.info(f"🔗 **Meeting Link:** [{res['booking']['meeting_link']}]({res['booking']['meeting_link']})")
+                            else:
+                                st.error(f"❌ {res['message']}")
+                    else:
+                        st.info("No available slots. Add a slot in the Interview Scheduler section below.")
+
+        # ---------------------------------------------------------
+        # Interview Scheduler & Slot Management Dashboard
+        # ---------------------------------------------------------
+        st.divider()
+        st.header("📅 Scheduled Interviews & Slot Management")
+        
+        sch_col1, sch_col2 = st.columns([2, 1])
+
+        with sch_col1:
+            st.subheader("📋 Booked Interviews")
+            scheduled_list = list_scheduled_interviews()
+            if scheduled_list:
+                df_scheduled = pd.DataFrame([
+                    {
+                        "Candidate Name": s["candidate_name"],
+                        "Role Title": s["role_title"],
+                        "Interview Time": s["slot_time"],
+                        "Meeting Link": s["meeting_link"],
+                        "Status": s["status"]
+                    } for s in scheduled_list
+                ])
+                st.dataframe(df_scheduled, use_container_width=True, hide_index=True)
+            else:
+                st.info("No interviews scheduled yet.")
+
+        with sch_col2:
+            st.subheader("➕ Add Interviewer Slot")
+            new_slot_input = st.text_input("Enter Slot Date & Time (e.g. 2026-08-10 03:00 PM):")
+            if st.button("Add Slot"):
+                if new_slot_input.strip():
+                    new_id = create_new_slot(new_slot_input.strip())
+                    st.success(f"✅ Added slot ID #{new_id} ({new_slot_input})")
+                else:
+                    st.warning("Please enter a slot time.")
