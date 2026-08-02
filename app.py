@@ -12,6 +12,7 @@ for folder in ["analyzer", "scorer", "services"]:
         sys.path.append(fpath)
 
 from analyzer.analyzer_agent import run_analyzer_pipeline
+from analyzer.jd_extractor import extract_jd_requirements
 from scorer.scorer_agent import run_scorer_pipeline
 
 st.set_page_config(
@@ -32,7 +33,7 @@ st.markdown(
 st.sidebar.header("📋 Agent Configuration")
 st.sidebar.info(
     "**Agent Workflow:**\n"
-    "1. **Analyzer Agent**: Parses PDF/DOCX resumes -> Structured JSON -> Matches skills with JD.\n"
+    "1. **Analyzer Agent**: Parses PDF/DOCX resumes -> Structured JSON -> Extracts JD Requirements -> Matches skills with JD.\n"
     "2. **Scoring Agent**: Evaluates Skill Fit (50%), Experience (30%), Education (20%) -> Calculates final weighted score & generates candidate evaluation."
 )
 
@@ -45,9 +46,18 @@ with col1:
     st.subheader("1. Job Description")
     job_description = st.text_area(
         "Enter or paste the Job Description (JD):",
-        height=220,
+        height=200,
         placeholder="e.g. Seeking a Senior Python Developer with experience in FastAPI, Docker, PostgreSQL, and AWS..."
     )
+
+    if job_description.strip():
+        with st.expander("📌 Extracted Job Requirements", expanded=True):
+            jd_func = extract_jd_requirements.func if hasattr(extract_jd_requirements, "func") else extract_jd_requirements
+            jd_reqs = jd_func(job_description)
+            st.write(f"**Role Title:** {jd_reqs.get('role_title', 'N/A')}")
+            st.write(f"**Required Skills:** {', '.join(jd_reqs.get('required_skills', [])) or 'None'}")
+            st.write(f"**Preferred Skills:** {', '.join(jd_reqs.get('preferred_skills', [])) or 'None'}")
+            st.write(f"**Min Experience:** {jd_reqs.get('min_experience_years', 0)} year(s)")
 
 with col2:
     st.subheader("2. Upload Candidate Resumes")
@@ -56,6 +66,7 @@ with col2:
         type=["pdf", "docx"],
         accept_multiple_files=True
     )
+
 
 # ---------------------------------------------------------
 # Process Resumes
