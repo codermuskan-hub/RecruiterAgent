@@ -20,6 +20,12 @@ from services.scheduler import (
     list_scheduled_interviews,
     create_new_slot
 )
+from services.email_templates import (
+    generate_interview_invite_email,
+    generate_shortlist_email,
+    generate_rejection_email
+)
+
 
 
 st.set_page_config(
@@ -221,6 +227,32 @@ if st.button("🚀 Analyze & Rank Candidates", type="primary", use_container_wid
                     else:
                         st.info("No available slots. Add a slot in the Interview Scheduler section below.")
 
+                    # ---------------------------------------------------------
+                    # Candidate Communication Templates Generator
+                    # ---------------------------------------------------------
+                    st.markdown("#### ✉️ Candidate Communication Generator")
+                    tmpl_type = st.selectbox(
+                        "Select Communication Template:",
+                        options=["Interview Invitation", "Shortlist Notification", "Rejection & Feedback"],
+                        key=f"tmpl_select_{rank}_{c['name']}"
+                    )
+
+                    role_name = jd_reqs.get("role_title", "Position") if 'jd_reqs' in locals() and jd_reqs else "Position"
+
+                    if tmpl_type == "Interview Invitation":
+                        slot_str = "To be determined"
+                        if avail_slots and 'selected_slot_label' in locals() and selected_slot_label:
+                            slot_str = selected_slot_label.split(" (ID:")[0]
+                        meet_str = f"https://meet.jit.si/Interview-{c['name'].replace(' ', '')}"
+                        email = generate_interview_invite_email(c["name"], role_name, slot_str, meet_str)
+                    elif tmpl_type == "Shortlist Notification":
+                        email = generate_shortlist_email(c["name"], role_name, c["score"])
+                    else:
+                        email = generate_rejection_email(c["name"], role_name, c["missing_skills"])
+
+                    st.text_input("Subject Line:", value=email["subject"], key=f"subj_{rank}_{c['name']}")
+                    st.text_area("Email Content (Ready to copy/send):", value=email["body"], height=200, key=f"body_{rank}_{c['name']}")
+
         # ---------------------------------------------------------
         # Interview Scheduler & Slot Management Dashboard
         # ---------------------------------------------------------
@@ -255,3 +287,26 @@ if st.button("🚀 Analyze & Rank Candidates", type="primary", use_container_wid
                     st.success(f"✅ Added slot ID #{new_id} ({new_slot_input})")
                 else:
                     st.warning("Please enter a slot time.")
+
+        # ---------------------------------------------------------
+        # Quick Email Generator Dashboard
+        # ---------------------------------------------------------
+        st.divider()
+        st.header("✉️ Candidate Communication Center")
+        
+        comm_cand_names = [c["name"] for c in ranked_candidates]
+        selected_cand_name = st.selectbox("Select Candidate for Communication:", options=comm_cand_names)
+        cand_obj = next((c for c in ranked_candidates if c["name"] == selected_cand_name), ranked_candidates[0])
+
+        comm_type = st.radio("Email Type:", options=["Interview Invitation", "Shortlist Notification", "Rejection & Feedback"], horizontal=True)
+        r_name = jd_reqs.get("role_title", "Position") if 'jd_reqs' in locals() and jd_reqs else "Position"
+
+        if comm_type == "Interview Invitation":
+            gen_email = generate_interview_invite_email(cand_obj["name"], r_name, "2026-08-10 10:00 AM", f"https://meet.jit.si/Interview-{cand_obj['name'].replace(' ', '')}")
+        elif comm_type == "Shortlist Notification":
+            gen_email = generate_shortlist_email(cand_obj["name"], r_name, cand_obj["score"])
+        else:
+            gen_email = generate_rejection_email(cand_obj["name"], r_name, cand_obj["missing_skills"])
+
+        st.text_input("Email Subject:", value=gen_email["subject"], key="comm_center_subj")
+        st.text_area("Email Body:", value=gen_email["body"], height=220, key="comm_center_body")
