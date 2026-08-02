@@ -1,3 +1,6 @@
+from langchain_core.tools import tool
+
+@tool
 def match_skills(job_description, candidate_skills):
     """
     Input: job description string, candidate skills list
