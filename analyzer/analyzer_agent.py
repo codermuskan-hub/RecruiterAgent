@@ -20,6 +20,7 @@ from parser.pdf_parser import parse_pdf
 from json_maker import make_json
 from matcher import match_skills
 from skills import extract_skills
+from jd_extractor import extract_jd_requirements
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -30,7 +31,7 @@ llm = ChatGroq(
     max_tokens=2000
 )
 
-analyzer_tools = [make_json, parse_docx, parse_pdf, match_skills, extract_skills]
+analyzer_tools = [make_json, parse_docx, parse_pdf, match_skills, extract_skills, extract_jd_requirements]
 
 # Support both LangChain legacy create_tool_calling_agent and new create_agent
 try:
@@ -50,15 +51,17 @@ except (ImportError, AttributeError):
         system_prompt="You are an expert Resume Analyzer Agent. Use your tools to parse the resume file, convert it into structured JSON, extract candidate skills, and compare them to the Job Description to create a skill match report."
     )
 
+
 def run_analyzer_pipeline(file_path: str, jd_text: str):
     """
-    Executes resume parsing, JSON extraction, skill extraction, and JD matching.
+    Executes resume parsing, JSON extraction, skill extraction, JD requirement extraction, and matching.
     Returns:
         dict: {
             'resume_json': dict,
             'skills': list,
             'match_report': dict,
-            'summary': str
+            'jd_requirements': dict,
+            'parsed_text': str
         }
     """
     # 1. Parse document based on extension
@@ -73,9 +76,15 @@ def run_analyzer_pipeline(file_path: str, jd_text: str):
     # 3. Extract Skills
     candidate_skills = extract_skills.invoke({"resume_json": resume_json}) if hasattr(extract_skills, "invoke") else extract_skills(resume_json)
 
-    # 4. Match with JD
+    # 4. Extract JD Requirements
+    jd_reqs = {}
     if jd_text and jd_text.strip():
-        match_report = match_skills.invoke({"job_description": jd_text, "candidate_skills": candidate_skills}) if hasattr(match_skills, "invoke") else match_skills(jd_text, candidate_skills)
+        jd_func = extract_jd_requirements.func if hasattr(extract_jd_requirements, "func") else extract_jd_requirements
+        jd_reqs = jd_func(jd_text)
+
+    # 5. Match with JD
+    if jd_text and jd_text.strip():
+        match_report = match_skills.invoke({"job_description": jd_reqs if jd_reqs else jd_text, "candidate_skills": candidate_skills}) if hasattr(match_skills, "invoke") else match_skills(jd_reqs if jd_reqs else jd_text, candidate_skills)
     else:
         match_report = {"matched_skills": [], "missing_skills": candidate_skills, "score": 0}
 
@@ -83,5 +92,6 @@ def run_analyzer_pipeline(file_path: str, jd_text: str):
         "resume_json": resume_json,
         "skills": candidate_skills,
         "match_report": match_report,
+        "jd_requirements": jd_reqs,
         "parsed_text": text
     }
