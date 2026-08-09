@@ -32,17 +32,20 @@ try:
     from langchain.agents import create_tool_calling_agent, AgentExecutor
     scorer_prompt = ChatPromptTemplate.from_messages([
         ("system", 
-         "You are an expert Recruiter Scoring Agent. Your task is to evaluate a candidate based on their "
-         "parsed resume JSON, skill match report, and Job Description requirements.\n"
+         "You are an expert Indian Tech Recruiter Scoring Agent. Your task is to evaluate a candidate based on their "
+         "parsed resume JSON, skill match report, Indian tech profile (Tier-1/2/3 college, notice period, CTC, location), "
+         "and Job Description requirements.\n"
          "Use your tool `calculate_weighted_score` to calculate the final weighted candidate score out of 100 based on:\n"
          "- skill_fit_score (weight 50%)\n"
          "- experience_fit_score (weight 30%)\n"
          "- education_fit_score (weight 20%)\n"
+         "- college_tier and notice_period_days\n"
          "Provide a detailed breakdown, strengths, gaps, and recruitment recommendation."
         ),
         ("user", 
          "Candidate Resume JSON:\n{resume_json}\n\n"
          "Skill Match Analysis:\n{match_report}\n\n"
+         "Indian Tech Profile:\n{indian_profile}\n\n"
          "Job Description:\n{jd_text}\n\n"
          "Please evaluate and compute the final score for this candidate."
         ),
@@ -58,10 +61,14 @@ except (ImportError, AttributeError):
         system_prompt="You are an expert Recruiter Scoring Agent. Evaluate the candidate using `calculate_weighted_score` and produce a scored recruitment report."
     )
 
-def run_scorer_pipeline(resume_json: dict, match_report: dict, jd_text: str) -> dict:
+
+def run_scorer_pipeline(resume_json: dict, match_report: dict, jd_text: str, indian_profile: dict = None) -> dict:
     """
     Evaluates candidate details and JD to produce final weighted scores, recommendation, and assessment.
     """
+    if indian_profile is None:
+        indian_profile = {}
+
     matched = match_report.get("matched_skills", [])
     missing = match_report.get("missing_skills", [])
     total_skills = len(matched) + len(missing)
@@ -73,7 +80,6 @@ def run_scorer_pipeline(resume_json: dict, match_report: dict, jd_text: str) -> 
         skill_fit_score = match_report.get("score", 0.0)
 
     # 2. Experience fit score (30% weight component)
-    # Evaluate experience entries from resume_json
     exp_entries = resume_json.get("experience", [])
     exp_score = 70.0  # Baseline score for having experience listed
     if isinstance(exp_entries, list) and len(exp_entries) > 0:
@@ -91,35 +97,45 @@ def run_scorer_pipeline(resume_json: dict, match_report: dict, jd_text: str) -> 
         edu_score += 15.0
     edu_score = min(100.0, edu_score)
 
+    college_tier = indian_profile.get("college_tier", "Tier-3")
+    notice_days = int(indian_profile.get("notice_period_days", 30))
+
     # Compute weighted score via tool
+    tool_args = {
+        "skill_fit_score": skill_fit_score,
+        "experience_fit_score": exp_score,
+        "education_fit_score": edu_score,
+        "college_tier": college_tier,
+        "notice_period_days": notice_days
+    }
+    
     if hasattr(calculate_weighted_score, "invoke"):
-        calc_json_str = calculate_weighted_score.invoke({
-            "skill_fit_score": skill_fit_score,
-            "experience_fit_score": exp_score,
-            "education_fit_score": edu_score
-        })
+        calc_json_str = calculate_weighted_score.invoke(tool_args)
     else:
-        calc_json_str = calculate_weighted_score(skill_fit_score, exp_score, edu_score)
+        calc_json_str = calculate_weighted_score(**tool_args)
         
     calc_res = json.loads(calc_json_str)
 
-    # Ask LLM agent to generate qualitative recruiter summary
+    # Ask LLM agent to generate qualitative recruiter summary with Indian tech context
     prompt = (
         f"Candidate Name: {resume_json.get('name', 'Candidate')}\n"
         f"Calculated Weighted Score: {calc_res['overall_score']}/100\n"
         f"Recommendation: {calc_res['recommendation']}\n"
+        f"College Tier: {college_tier} ({indian_profile.get('college_name', 'College')})\n"
+        f"Notice Period: {notice_days} days\n"
+        f"Location: {indian_profile.get('current_location', 'NCR/BLR/Remote')}\n"
         f"Skill Score: {calc_res['skill_fit_score']}%, Experience Score: {calc_res['experience_fit_score']}%, Education Score: {calc_res['education_fit_score']}%\n"
         f"Matched Skills: {matched}\n"
         f"Missing Skills: {missing}\n"
         f"Job Description: {jd_text}\n\n"
-        "Provide a concise 3-bullet point recruiter evaluation summary explaining strengths, gaps, and why they got this score."
+        "Provide a concise 3-bullet point recruiter evaluation summary explaining strengths, gaps (including notice period / college pedigree relevance), and why they got this score."
     )
     
     try:
         response = llm.invoke(prompt)
         assessment_text = response.content
     except Exception as e:
-        assessment_text = f"Candidate matches {len(matched)} required skills. Missing: {missing}."
+        assessment_text = f"Candidate matches {len(matched)} required skills. College: {college_tier}. Notice Period: {notice_days} days."
 
     return {
         "overall_score": calc_res["overall_score"],
@@ -127,5 +143,7 @@ def run_scorer_pipeline(resume_json: dict, match_report: dict, jd_text: str) -> 
         "skill_fit_score": calc_res["skill_fit_score"],
         "experience_fit_score": calc_res["experience_fit_score"],
         "education_fit_score": calc_res["education_fit_score"],
+        "college_tier": college_tier,
+        "notice_period_days": notice_days,
         "assessment_text": assessment_text
     }

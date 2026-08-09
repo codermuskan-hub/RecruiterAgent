@@ -88,10 +88,73 @@ def run_analyzer_pipeline(file_path: str, jd_text: str):
     else:
         match_report = {"matched_skills": [], "missing_skills": candidate_skills, "score": 0}
 
+    # 6. Extract Indian Tech Attributes (College Tier, Notice Period, CTC, Location)
+    try:
+        from indian_tech_recognizer import (
+            classify_indian_college_tier,
+            normalize_indian_degree,
+            parse_notice_period,
+            parse_ctc_lpa,
+            normalize_indian_location
+        )
+    except ImportError:
+        from analyzer.indian_tech_recognizer import (
+            classify_indian_college_tier,
+            normalize_indian_degree,
+            parse_notice_period,
+            parse_ctc_lpa,
+            normalize_indian_location
+        )
+
+    # Detect College & Tier
+    college_tier = "Tier-3"
+    recognized_college = "Regional Institution"
+    recognized_degree = "B.Tech"
+
+    edu_list = resume_json.get("education", [])
+    if isinstance(edu_list, list):
+        for edu in edu_list:
+            inst = edu.get("institution", "") if isinstance(edu, dict) else str(edu)
+            deg = edu.get("degree", "") if isinstance(edu, dict) else ""
+            if deg:
+                recognized_degree = normalize_indian_degree(deg)
+            t, name = classify_indian_college_tier(inst)
+            if t == "Tier-1":
+                college_tier = "Tier-1"
+                recognized_college = inst
+                break
+            elif t == "Tier-2" and college_tier != "Tier-1":
+                college_tier = "Tier-2"
+                recognized_college = inst
+    elif isinstance(edu_list, str):
+        college_tier, recognized_college = classify_indian_college_tier(edu_list)
+
+    # Detect Notice Period & CTC & Location from resume text / summary
+    searchable_text = f"{text} {json.dumps(resume_json)}"
+    notice_days = parse_notice_period(searchable_text)
+    curr_ctc, exp_ctc = parse_ctc_lpa(searchable_text)
+
+    cand_loc = resume_json.get("address") or resume_json.get("location") or ""
+    if isinstance(cand_loc, dict):
+        cand_loc = cand_loc.get("city") or str(cand_loc)
+    normalized_loc = normalize_indian_location(f"{cand_loc} {searchable_text[:500]}")
+
+    indian_tech_profile = {
+        "college_tier": college_tier,
+        "college_name": recognized_college,
+        "degree": recognized_degree,
+        "notice_period_days": notice_days,
+        "current_ctc_lpa": curr_ctc,
+        "expected_ctc_lpa": exp_ctc,
+        "current_location": normalized_loc,
+        "relocation_willingness": "Yes"
+    }
+
     return {
         "resume_json": resume_json,
         "skills": candidate_skills,
         "match_report": match_report,
         "jd_requirements": jd_reqs,
+        "indian_tech_profile": indian_tech_profile,
         "parsed_text": text
     }
