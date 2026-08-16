@@ -20,9 +20,18 @@ from database.database import (
     update_candidate_stage,
     get_candidate_by_id
 )
+from services.validator import (
+    validate_job_description,
+    validate_candidate_data
+)
 from services.assessment_service import (
     generate_assessment_invite,
     simulate_assessment_completion
+)
+from services.export_service import (
+    export_candidates_to_csv,
+    export_candidates_to_json,
+    compute_hiring_analytics
 )
 from services.scheduler import (
     get_available_time_slots,
@@ -46,26 +55,28 @@ st.set_page_config(
 st.title("🤖 HYRIX: Indian Tech Recruitment Specialist")
 st.markdown(
     "Automated resume parsing, Indian college tier recognition (IIT/NIT/BITS), tech-specific skill matching, "
-    "notice period & CTC evaluation, and HackerEarth / Mettl assessment workflows."
+    "notice period & CTC evaluation, HackerEarth / Mettl assessments, and hiring analytics."
 )
 
 # ---------------------------------------------------------
-# Sidebar Configuration
+# Sidebar Configuration & Quick Stats
 # ---------------------------------------------------------
 st.sidebar.header("📋 Agent Configuration")
 st.sidebar.info(
     "**Agent Workflow:**\n"
     "1. **Analyzer Agent**: Multi-document ingestion -> Structured JSON -> Indian College Tier recognition -> Tech taxonomy matching.\n"
     "2. **Scorer Agent**: Weighted Scoring (Skill 50%, Experience 30%, Education 20%) + Tier-1 Pedigree & Notice period bonuses.\n"
-    "3. **Pipeline & Assessment**: HackerEarth / Mettl coding evaluations and persistent pipeline stages."
+    "3. **Pipeline & Assessment**: HackerEarth / Mettl coding evaluations and persistent pipeline stages.\n"
+    "4. **Analytics & Export**: Real-time hiring funnel metrics and CSV/JSON reporting."
 )
 
 # ---------------------------------------------------------
 # Tabs Navigation
 # ---------------------------------------------------------
-tab_eval, tab_pipeline, tab_schedule, tab_comm = st.tabs([
+tab_eval, tab_pipeline, tab_analytics, tab_schedule, tab_comm = st.tabs([
     "🚀 Resume Screening & Scoring",
     "🇮🇳 Candidate Pipeline & Assessments",
+    "📊 Hiring Analytics & Exports",
     "📅 Interview Scheduler",
     "✉️ Communication Center"
 ])
@@ -85,13 +96,17 @@ with tab_eval:
         )
 
         if job_description.strip():
-            with st.expander("📌 Extracted Job Requirements", expanded=True):
-                jd_func = extract_jd_requirements.func if hasattr(extract_jd_requirements, "func") else extract_jd_requirements
-                jd_reqs = jd_func(job_description)
-                st.write(f"**Role Title:** {jd_reqs.get('role_title', 'N/A')}")
-                st.write(f"**Required Skills:** {', '.join(jd_reqs.get('required_skills', [])) or 'None'}")
-                st.write(f"**Preferred Skills:** {', '.join(jd_reqs.get('preferred_skills', [])) or 'None'}")
-                st.write(f"**Min Experience:** {jd_reqs.get('min_experience_years', 0)} year(s)")
+            is_valid_jd, jd_msg = validate_job_description(job_description)
+            if not is_valid_jd:
+                st.warning(f"⚠️ {jd_msg}")
+            else:
+                with st.expander("📌 Extracted Job Requirements", expanded=True):
+                    jd_func = extract_jd_requirements.func if hasattr(extract_jd_requirements, "func") else extract_jd_requirements
+                    jd_reqs = jd_func(job_description)
+                    st.write(f"**Role Title:** {jd_reqs.get('role_title', 'N/A')}")
+                    st.write(f"**Required Skills:** {', '.join(jd_reqs.get('required_skills', [])) or 'None'}")
+                    st.write(f"**Preferred Skills:** {', '.join(jd_reqs.get('preferred_skills', [])) or 'None'}")
+                    st.write(f"**Min Experience:** {jd_reqs.get('min_experience_years', 0)} year(s)")
 
     with col2:
         st.subheader("2. Upload Candidate Resumes")
@@ -102,10 +117,11 @@ with tab_eval:
         )
 
     if st.button("🚀 Run Indian Tech Analysis & Rank", type="primary"):
-        if not job_description or not job_description.strip():
-            st.warning("⚠️ Please enter a Job Description before running the analysis.")
+        is_valid_jd, jd_msg = validate_job_description(job_description)
+        if not is_valid_jd:
+            st.error(f"❌ Validation Error: {jd_msg}")
         elif not uploaded_files:
-            st.warning("⚠️ Please upload at least one candidate resume.")
+            st.warning("⚠️ Please upload at least one candidate resume (PDF or DOCX).")
         else:
             st.divider()
             st.header("📊 Candidate Evaluation & Leaderboard")
@@ -143,7 +159,20 @@ with tab_eval:
                     # 2. Run Scoring Agent Pipeline with Indian Tech Profile
                     scorer_res = run_scorer_pipeline(resume_json, match_report, job_description, indian_profile=indian_profile)
 
-                    # 3. Save to SQLite Candidate Pipeline DB
+                    # 3. Validate Candidate Data
+                    cand_payload = {
+                        "name": c_name,
+                        "email": c_email,
+                        "phone": c_phone,
+                        "notice_period_days": indian_profile.get("notice_period_days", 30),
+                        "current_ctc_lpa": indian_profile.get("current_ctc_lpa", 0.0),
+                        "expected_ctc_lpa": indian_profile.get("expected_ctc_lpa", 0.0)
+                    }
+                    val_ok, val_errs = validate_candidate_data(cand_payload)
+                    if not val_ok:
+                        st.info(f"ℹ️ Candidate data notes for {c_name}: {', '.join(val_errs)}")
+
+                    # 4. Save to SQLite Candidate Pipeline DB
                     db_candidate = {
                         "name": c_name,
                         "email": c_email,
@@ -270,7 +299,7 @@ with tab_eval:
 
 
 # =========================================================
-# TAB 2: Candidate Pipeline & Assessments (Option A1)
+# TAB 2: Candidate Pipeline & Assessments
 # =========================================================
 with tab_pipeline:
     st.subheader("🇮🇳 Candidate Pipeline Management & HackerEarth / Mettl Assessments")
@@ -318,21 +347,27 @@ with tab_pipeline:
             a_btn_col1, a_btn_col2 = st.columns(2)
             with a_btn_col1:
                 if st.button("📤 Send Assessment Invite"):
-                    inv = generate_assessment_invite(
+                    ok_inv, inv, err_inv = generate_assessment_invite(
                         candidate_id=chosen_cand_id,
                         candidate_name=chosen_cand["name"],
                         candidate_email=chosen_cand["email"] or "candidate@example.com",
                         role_title="Software Engineer",
                         provider=provider
                     )
-                    st.success(f"✅ Assessment invite sent via {provider}!")
-                    st.info(f"🔗 **Candidate Test Link:** [{inv['invite_url']}]({inv['invite_url']})")
+                    if ok_inv:
+                        st.success(f"✅ Assessment invite sent via {provider}!")
+                        st.info(f"🔗 **Candidate Test Link:** [{inv['invite_url']}]({inv['invite_url']})")
+                    else:
+                        st.error(f"❌ Assessment Dispatch Failed: {err_inv}")
 
             with a_btn_col2:
                 if st.button("⚡ Simulate Assessment Completion"):
-                    sim_out = simulate_assessment_completion(chosen_cand_id, provider)
-                    st.success(f"🎉 Assessment Completed! Coding Score: **{sim_out['score']}/100** ({sim_out['percentile']}th percentile)")
-                    st.info(f"🛡️ Proctoring Check: {sim_out['proctoring_status']}")
+                    ok_sim, sim_out, err_sim = simulate_assessment_completion(chosen_cand_id, provider)
+                    if ok_sim:
+                        st.success(f"🎉 Assessment Completed! Coding Score: **{sim_out['score']}/100** ({sim_out['percentile']}th percentile)")
+                        st.info(f"🛡️ Proctoring Check: {sim_out['proctoring_status']}")
+                    else:
+                        st.error(f"❌ Assessment Evaluation Failed: {err_sim}")
 
         with action_col2:
             st.markdown("#### 🔄 Move Candidate Stage")
@@ -353,7 +388,59 @@ with tab_pipeline:
 
 
 # =========================================================
-# TAB 3: Interview Scheduler
+# TAB 3: Hiring Analytics & Exports
+# =========================================================
+with tab_analytics:
+    st.subheader("📊 Hiring Funnel Analytics & Candidate Data Exports")
+    all_analytics_candidates = get_all_candidates()
+
+    if all_analytics_candidates:
+        stats = compute_hiring_analytics(all_analytics_candidates)
+
+        kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+        kpi_col1.metric("Total Candidates", stats["total_candidates"])
+        kpi_col2.metric("Average Score", f"{stats['avg_score']} / 100")
+        kpi_col3.metric("Avg Notice Period", f"{stats['avg_notice_period']} days")
+        kpi_col4.metric("Assessment Pass Rate", stats["assessment_completion_rate"])
+
+        chart_col1, chart_col2 = st.columns(2)
+        with chart_col1:
+            st.markdown("#### 📈 Stage Distribution")
+            df_stages = pd.DataFrame(list(stats["stage_distribution"].items()), columns=["Stage", "Candidate Count"])
+            st.bar_chart(df_stages.set_index("Stage"))
+
+        with chart_col2:
+            st.markdown("#### 🎓 College Tier Distribution")
+            df_tiers = pd.DataFrame(list(stats["tier_distribution"].items()), columns=["Tier", "Candidate Count"])
+            st.bar_chart(df_tiers.set_index("Tier"))
+
+        st.divider()
+        st.subheader("📥 Export Pipeline Data")
+        exp_col1, exp_col2 = st.columns(2)
+
+        with exp_col1:
+            csv_data = export_candidates_to_csv(all_analytics_candidates)
+            st.download_button(
+                label="📄 Download Candidate Summary (CSV)",
+                data=csv_data,
+                file_name="recruiter_agent_candidates.csv",
+                mime="text/csv"
+            )
+
+        with exp_col2:
+            json_data = export_candidates_to_json(all_analytics_candidates)
+            st.download_button(
+                label="📦 Download Full Candidate Database (JSON)",
+                data=json_data,
+                file_name="recruiter_agent_candidates.json",
+                mime="application/json"
+            )
+    else:
+        st.info("No candidates in the database yet to generate analytics. Analyze resumes in Tab 1 to populate the analytics engine!")
+
+
+# =========================================================
+# TAB 4: Interview Scheduler
 # =========================================================
 with tab_schedule:
     st.subheader("📅 Scheduled Interviews & Slot Management")
@@ -389,7 +476,7 @@ with tab_schedule:
 
 
 # =========================================================
-# TAB 4: Communication Center
+# TAB 5: Communication Center
 # =========================================================
 with tab_comm:
     st.subheader("✉️ Recruiter Communication Center")

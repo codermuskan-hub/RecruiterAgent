@@ -93,15 +93,18 @@ def test_indian_recruitment_specialist():
     print(f"Pipeline candidate saved with ID: {cid}")
 
     print("\n--- 7. Testing HackerEarth Assessment API Flow ---")
-    invite = generate_assessment_invite(cid, "Pooja Verma", "pooja.verma@test.com", "Senior Java Engineer", "HackerEarth")
+    ok, invite, err = generate_assessment_invite(cid, "Pooja Verma", "pooja.verma@test.com", "Senior Java Engineer", "HackerEarth")
+    assert ok is True
     assert "invite_url" in invite
     assert invite["status"] == "Assessment Sent"
     print(f"HackerEarth invite generated: {invite['invite_url']}")
 
-    sim_res = simulate_assessment_completion(cid, "HackerEarth")
+    ok_sim, sim_res, err_sim = simulate_assessment_completion(cid, "HackerEarth")
+    assert ok_sim is True
     assert sim_res["status"] == "Completed"
     assert sim_res["score"] > 0
     print(f"Assessment completed: Score={sim_res['score']}, Percentile={sim_res['percentile']}")
+
 
     stage_updated = update_candidate_stage(cid, "Interview Scheduled")
     assert stage_updated is True
