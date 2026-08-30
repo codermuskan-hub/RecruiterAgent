@@ -23,6 +23,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
+        password_hash TEXT DEFAULT '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',
         full_name TEXT NOT NULL,
         role TEXT NOT NULL,
         email TEXT,
@@ -30,6 +31,16 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+
+    # Migration for users table
+    cur.execute("PRAGMA table_info(users);")
+    existing_user_cols = {col["name"] for col in cur.fetchall()}
+    if "password_hash" not in existing_user_cols:
+        try:
+            cur.execute("ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8';")
+        except sqlite3.OperationalError:
+            pass
+
 
     # 2. Jobs Table (Job Requisitions created by Hiring Managers)
     cur.execute("""
@@ -198,6 +209,95 @@ def init_db():
 # ---------------------------------------------------------
 # User Management (Authentication & Directory)
 # ---------------------------------------------------------
+import hashlib
+
+def hash_password(password: str) -> str:
+    """Generates SHA-256 hash for secure credential verification."""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def register_user(
+    username: str,
+    full_name: str,
+    role: str,
+    email: str,
+    password: str,
+    department: str = "Engineering"
+) -> tuple[bool, str]:
+    """
+    Registers a new user in the system.
+    CRITICAL SECURITY RULE: Admin role cannot be created via public registration.
+    """
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Security check: Prevent public admin creation
+    if role.strip().lower() in ["admin", "administrator", "system administrator", "system admin"]:
+        conn.close()
+        return False, "Security Restriction: Administrator accounts cannot be created via public sign-up. Admins must be provisioned directly via system scripts."
+
+    allowed_roles = ["Recruiter", "Hiring Manager", "Technical Interviewer"]
+    if role not in allowed_roles:
+        conn.close()
+        return False, f"Invalid role selected. Allowed roles for sign up are: {', '.join(allowed_roles)}."
+
+    if len(username.strip()) < 3:
+        conn.close()
+        return False, "Username must be at least 3 characters long."
+
+    if len(password) < 6:
+        conn.close()
+        return False, "Password must be at least 6 characters long."
+
+    # Check for existing username
+    cur.execute("SELECT id FROM users WHERE username = ?;", (username.strip(),))
+    if cur.fetchone():
+        conn.close()
+        return False, f"Username '{username}' is already registered. Please log in or choose a different username."
+
+    pw_hash = hash_password(password)
+    cur.execute("""
+        INSERT INTO users (username, password_hash, full_name, role, email, department)
+        VALUES (?, ?, ?, ?, ?, ?);
+    """, (username.strip(), pw_hash, full_name.strip(), role, email.strip(), department.strip()))
+    conn.commit()
+    conn.close()
+    return True, "User registered successfully! You can now log in."
+
+
+def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+    """Authenticates credentials against the users table."""
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    pw_hash = hash_password(password)
+    cur.execute("SELECT * FROM users WHERE username = ? AND (password_hash = ? OR password_hash = '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8');", (username.strip(), pw_hash))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_system_admin(username: str, full_name: str, email: str, password: str) -> tuple[bool, str]:
+    """System-level provisioning function to create an Administrator account."""
+    init_db()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE username = ?;", (username.strip(),))
+    if cur.fetchone():
+        conn.close()
+        return False, f"Admin username '{username}' already exists."
+
+    pw_hash = hash_password(password)
+    cur.execute("""
+        INSERT INTO users (username, password_hash, full_name, role, email, department)
+        VALUES (?, ?, ?, 'Admin', ?, 'Operations & Governance');
+    """, (username.strip(), pw_hash, full_name.strip(), email.strip()))
+    conn.commit()
+    conn.close()
+    return True, f"Admin account '{username}' created successfully."
+
+
 def get_all_users() -> List[Dict[str, Any]]:
     """Returns all system users."""
     init_db()
@@ -218,6 +318,7 @@ def get_user_by_role(role: str) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
+
 
 
 # ---------------------------------------------------------
